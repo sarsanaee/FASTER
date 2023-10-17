@@ -8,6 +8,10 @@
 #include <cstdlib>
 #include <random>
 #include <string>
+#include <chrono>
+#include <sstream>
+#include <iostream>
+
 
 #include "file.h"
 
@@ -15,8 +19,14 @@
 #include "core/faster.h"
 #include "device/null_disk.h"
 
+#include "hdr_histogram.h"
+
 using namespace std::chrono_literals;
 using namespace FASTER::core;
+
+using std::chrono::duration_cast;
+using std::chrono::high_resolution_clock;
+using std::chrono::time_point;
 
 /// Basic YCSB benchmark.
 
@@ -32,6 +42,10 @@ enum class Workload {
   A_50_50 = 0,
   RMW_100 = 1,
 };
+
+static constexpr int64_t kMinLatencyMicros = 1;
+static constexpr int64_t kMaxLatencyMicros = 1000 * 1000 * 100;  // 100 sec
+static constexpr int64_t kLatencyPrecision = 2;  // Two significant digits
 
 static constexpr uint64_t kInitCount = 250000000;
 static constexpr uint64_t kTxnCount = 1000000000;
@@ -50,6 +64,8 @@ static constexpr uint64_t kMaxKey = 268435456;
 static constexpr uint64_t kRunSeconds = 30;
 static constexpr uint64_t kCheckpointSeconds = 0;
 
+static uint64_t num_request_latency_samples = 0;
+
 aligned_unique_ptr_t<uint64_t> init_keys_;
 aligned_unique_ptr_t<uint64_t> txn_keys_;
 std::atomic<uint64_t> idx_{ 0 };
@@ -57,6 +73,8 @@ std::atomic<bool> done_{ false };
 std::atomic<uint64_t> total_duration_{ 0 };
 std::atomic<uint64_t> total_reads_done_{ 0 };
 std::atomic<uint64_t> total_writes_done_{ 0 };
+
+hdr_histogram *latency_hist;
 
 class ReadContext;
 class UpsertContext;
@@ -364,6 +382,7 @@ void load_files(const std::string& load_filename, const std::string& run_filenam
   }
   if(kInitCount != count) {
     printf("Init file load fail!\n");
+    hdr_close(latency_hist);
     exit(1);
   }
 
@@ -392,6 +411,7 @@ void load_files(const std::string& load_filename, const std::string& run_filenam
   }
   if(kTxnCount != count) {
     printf("Txn file load fail!\n");
+    hdr_close(latency_hist);
     exit(1);
   }
   printf("loaded %" PRIu64 " txns.\n", count);
@@ -475,6 +495,8 @@ void thread_run_benchmark(store_t* store, size_t thread_idx) {
           store->CompletePending(false);
         }
       }
+
+      time_point<high_resolution_clock> ts = high_resolution_clock::now();
       switch(FN(rng)) {
       case Op::Insert:
       case Op::Upsert: {
@@ -514,6 +536,14 @@ void thread_run_benchmark(store_t* store, size_t thread_idx) {
         }
         break;
       }
+      time_point<high_resolution_clock> te = high_resolution_clock::now();
+      auto latency_us = duration_cast<std::chrono::nanoseconds>(
+		      te - ts).count();
+
+      hdr_record_value(latency_hist, latency_us);
+      num_request_latency_samples++;
+
+
     }
   }
 
@@ -527,6 +557,11 @@ void thread_run_benchmark(store_t* store, size_t thread_idx) {
   total_writes_done_ += writes_done;
   printf("Finished thread %" PRIu64 " : %" PRIu64 " reads, %" PRIu64 " writes, in %.2f seconds.\n",
          thread_idx, reads_done, writes_done, (double)duration.count() / kNanosPerSecond);
+  auto perc = hdr_value_at_percentile;
+  std::cout << "Latency (us): ";
+  std::cout << "median " << perc(latency_hist, 50.0) << ",99th: " 
+	  << perc(latency_hist, 99.0) << ", 99.9th: " << perc(latency_hist, 99.9) << std::endl;
+
 }
 
 template <Op(*FN)(std::mt19937&)>
@@ -589,6 +624,8 @@ void run_benchmark(store_t* store, size_t num_threads) {
          num_checkpoints.load(),
          ((double)total_reads_done_ + (double)total_writes_done_) / ((double)total_duration_ /
              kNanosPerSecond));
+
+  hdr_close(latency_hist);
 }
 
 void run(Workload workload, size_t num_threads) {
@@ -611,6 +648,7 @@ void run(Workload workload, size_t num_threads) {
     run_benchmark<ycsb_rmw_100>(&store, num_threads);
     break;
   default:
+    hdr_close(latency_hist);
     printf("Unknown workload!\n");
     exit(1);
   }
@@ -622,6 +660,9 @@ int main(int argc, char* argv[]) {
     printf("Usage: benchmark.exe <workload> <# threads> <load_filename> <run_filename>\n");
     exit(0);
   }
+
+  int ret = hdr_init(kMinLatencyMicros, kMaxLatencyMicros, kLatencyPrecision,
+		                         &latency_hist);
 
   Workload workload = static_cast<Workload>(std::atol(argv[1]));
   size_t num_threads = ::atol(argv[2]);

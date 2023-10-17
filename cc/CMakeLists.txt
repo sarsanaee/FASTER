@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 14)
 enable_testing()
 
 include(ExternalProject)
+
+
 project(FASTER)
 
 # The set of additional options that we can pass into cmake. We currently support
@@ -97,6 +99,7 @@ set (FASTER_BENCHMARK_LINK_LIBS ${FASTER_LINK_LIBS})
 if(WIN32)
 set (FASTER_BENCHMARK_LINK_LIBS ${FASTER_LINK_LIBS} rpcrt4 wsock32 Ws2_32)
 else()
+	# set (FASTER_BENCHMARK_LINK_LIBS ${FASTER_BENCHMARK_LINK_LIBS} stdc++fs uuid tbb gcc aio m stdc++ pthread hdr_histogram)
   set (FASTER_BENCHMARK_LINK_LIBS ${FASTER_BENCHMARK_LINK_LIBS} stdc++fs uuid tbb gcc aio m stdc++ pthread)
   if(USE_URING)
     set (FASTER_BENCHMARK_LINK_LIBS ${FASTER_BENCHMARK_LINK_LIBS} uring)
@@ -115,10 +118,16 @@ ENDFUNCTION()
 FUNCTION(ADD_FASTER_BENCHMARK BENCHMARK_NAME)
   add_executable(${BENCHMARK_NAME} ${BENCHMARK_HEADERS} ${BENCHMARK_NAME}.cc)
 
-  target_link_libraries(${BENCHMARK_NAME} ${FASTER_BENCHMARK_LINK_LIBS})
+  target_link_libraries(${BENCHMARK_NAME} ${FASTER_BENCHMARK_LINK_LIBS} hdr_histogram)
 ENDFUNCTION()
 
+
+
 # Build each subdirectory
+set(HDR_HISTOGRAM_BUILD_PROGRAMS OFF CACHE BOOL "Minimize HDR histogram build")
+set(HDR_LOG_REQUIRED OFF CACHE BOOL "Disable HDR histogram's log to avoid zlib dependency")
+add_subdirectory(third_party/HdrHistogram_c)
+
 add_subdirectory(benchmark-dir)
 add_subdirectory(playground)
 add_subdirectory(src)

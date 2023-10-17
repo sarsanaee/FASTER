@@ -7,4 +7,8 @@ set(BENCHMARK_SOURCES
 
 ADD_FASTER_BENCHMARK(benchmark)
 
+
+target_include_directories(benchmark PRIVATE /home/alireza/FASTER/cc/third_party/HdrHistogram_c/include/hdr)
+
 add_executable(process_ycsb process_ycsb.cc)
+
